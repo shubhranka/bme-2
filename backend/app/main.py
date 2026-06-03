@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -14,6 +14,7 @@ from .api import auth
 from .api.deps import get_current_user
 from .workers.tasks import run_simple_test_task, generate_and_run_task
 from .celery_app import celery_app
+from .api.websocket import manager, subscribe_to_logs
 
 app = FastAPI(title="E2E Test Engineer")
 
@@ -255,6 +256,32 @@ async def get_run(run_id: str, current_user: User = Depends(get_current_user), d
         error_message=run.error_message,
         created_at=run.created_at.isoformat()
     )
+
+
+@app.websocket("/api/ws/logs/{run_id}")
+async def websocket_logs(websocket: WebSocket, run_id: str):
+    """WebSocket endpoint for streaming test execution logs."""
+    connection_id = str(uuid.uuid4())
+
+    try:
+        await manager.connect(websocket, run_id, connection_id)
+
+        # Stream logs from Redis pub/sub
+        async for log_entry in subscribe_to_logs(run_id):
+            await manager.broadcast_to_run(run_id, log_entry)
+
+    except WebSocketDisconnect:
+        manager.disconnect(run_id, connection_id)
+    except Exception as e:
+        # Send error message if connection fails
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": str(e)
+            })
+        except:
+            pass
+        manager.disconnect(run_id, connection_id)
 
 
 @app.get("/artifacts/{file_name}")
