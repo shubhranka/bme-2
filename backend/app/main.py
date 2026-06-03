@@ -7,14 +7,13 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .runner import run_simple_test, run_generated_test
-from .discovery import discover_page_structure
-from .llm import generate_test_from_structure
 from .db import get_db, init_db
-from .models.test import Test, TestRun, Screenshot
+from .models.test import Test, TestRun
 from .models.user import User
 from .api import auth
-from .api.deps import get_current_user, get_optional_user
+from .api.deps import get_current_user
+from .workers.tasks import run_simple_test_task, generate_and_run_task
+from .celery_app import celery_app
 
 app = FastAPI(title="E2E Test Engineer")
 
@@ -83,27 +82,15 @@ async def run_test(request: TestRequest, current_user: User = Depends(get_curren
     db.add(test_run)
     await db.commit()
 
-    try:
-        # Run the test
-        result = await run_simple_test(request.url)
+    # Enqueue Celery task
+    task = run_simple_test_task.apply_async(args=[request.url], task_id=run_id)
 
-        # Update test run with results
-        test_run.status = "passed" if result["success"] else "failed"
-        test_run.completed_at = datetime.utcnow()
-        test_run.page_title = result.get("title")
-        test_run.page_url = result.get("url")
-        await db.commit()
-
-        # Add run ID to result
-        result["run_id"] = run_id
-        return result
-
-    except Exception as e:
-        test_run.status = "failed"
-        test_run.completed_at = datetime.utcnow()
-        test_run.error_message = str(e)
-        await db.commit()
-        raise
+    return {
+        "run_id": run_id,
+        "task_id": task.id,
+        "status": "running",
+        "message": "Test queued for execution"
+    }
 
 
 @app.post("/api/generate-and-run")
@@ -121,84 +108,69 @@ async def generate_and_run(request: TestRequest, current_user: User = Depends(ge
         started_at=datetime.utcnow()
     )
     db.add(test_run)
+
+    # Save test configuration if name provided
+    if request.name:
+        test_id = str(uuid.uuid4())
+        test = Test(
+            id=test_id,
+            name=request.name,
+            target_url=request.url,
+            generated_code=None  # Will be updated by worker
+        )
+        db.add(test)
+        test_run.test_id = test_id
+
     await db.commit()
 
-    try:
-        # Step 1: Discover page structure
-        page_structure = await discover_page_structure(request.url)
+    # Enqueue Celery task
+    task = generate_and_run_task.apply_async(
+        args=[request.url, request.name],
+        task_id=run_id
+    )
 
-        # Step 2: Generate test using LLM
-        generated_test = generate_test_from_structure(page_structure)
+    return {
+        "run_id": run_id,
+        "task_id": task.id,
+        "test_id": test_run.test_id,
+        "status": "running",
+        "message": "Test generation and execution queued"
+    }
 
-        # Save test configuration if name provided
-        test_id = None
-        if request.name:
-            test_id = str(uuid.uuid4())
-            test = Test(
-                id=test_id,
-                name=request.name,
-                target_url=request.url,
-                generated_code=str(generated_test.model_dump_json())
-            )
-            db.add(test)
-            await db.commit()
 
-            # Link test run to test
-            test_run.test_id = test_id
-            await db.commit()
+@app.get("/api/tasks/{task_id}")
+async def get_task_status(task_id: str, current_user: User = Depends(get_current_user)):
+    """Get the status of a Celery task."""
+    task = celery_app.AsyncResult(task_id)
 
-        # Step 3: Run the generated test
-        result = await run_generated_test(request.url, generated_test)
-
-        # Step 4: Save screenshots to database
-        if result.get("steps"):
-            for i, step in enumerate(result["steps"]):
-                if step.get("screenshot"):
-                    screenshot = Screenshot(
-                        id=str(uuid.uuid4()),
-                        run_id=run_id,
-                        image_path=step["screenshot"],
-                        description=f"Step {i+1}: {step.get('action', '')}",
-                        step_index=i
-                    )
-                    db.add(screenshot)
-
-        # Update test run with results
-        test_run.status = "passed" if result.get("success") else "failed"
-        test_run.completed_at = datetime.utcnow()
-        test_run.page_title = page_structure.title
-        test_run.page_url = page_structure.url
-        test_run.video_path = result.get("final_screenshot")
-        await db.commit()
-
-        # Add the generated test info to result
-        result["run_id"] = run_id
-        result["test_id"] = test_id
-        result["title"] = page_structure.title
-        result["url"] = page_structure.url
-        result["test"] = {
-            "description": generated_test.description,
-            "steps": [
-                {
-                    "action_type": step.action_type,
-                    "selector": step.selector,
-                    "description": step.description,
-                }
-                for step in generated_test.steps
-            ],
-        }
-
-        return result
-
-    except Exception as e:
-        test_run.status = "failed"
-        test_run.completed_at = datetime.utcnow()
-        test_run.error_message = str(e)
-        await db.commit()
+    if task.state == "PENDING":
         return {
-            "success": False,
-            "error": str(e),
-            "run_id": run_id
+            "task_id": task_id,
+            "status": "pending",
+            "message": "Task is waiting to be processed"
+        }
+    elif task.state == "PROGRESS":
+        return {
+            "task_id": task_id,
+            "status": "running",
+            "message": "Task is being processed"
+        }
+    elif task.state == "SUCCESS":
+        return {
+            "task_id": task_id,
+            "status": "completed",
+            "result": task.result
+        }
+    elif task.state == "FAILURE":
+        return {
+            "task_id": task_id,
+            "status": "failed",
+            "error": str(task.info)
+        }
+    else:
+        return {
+            "task_id": task_id,
+            "status": task.state.lower()
         }
 
 

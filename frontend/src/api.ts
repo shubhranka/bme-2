@@ -6,6 +6,7 @@ interface TestResult {
   error?: string;
   run_id?: string;
   test_id?: string;
+  task_id?: string;
   test?: {
     description: string;
     steps: Array<{
@@ -21,6 +22,14 @@ interface TestResult {
     error?: string;
     screenshot?: string;
   }>;
+}
+
+interface TaskStatus {
+  task_id: string;
+  status: "pending" | "running" | "completed" | "failed";
+  message?: string;
+  result?: TestResult;
+  error?: string;
 }
 
 interface SavedTest {
@@ -44,12 +53,11 @@ interface TestRun {
   created_at: string;
 }
 
-export async function runTest(url: string): Promise<TestResult> {
+export async function runTest(url: string): Promise<{ run_id: string; task_id: string; status: string; message: string }> {
   const response = await fetch("/api/run", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ url }),
   });
 
@@ -60,12 +68,11 @@ export async function runTest(url: string): Promise<TestResult> {
   return response.json();
 }
 
-export async function generateAndRunTest(url: string, name?: string): Promise<TestResult> {
+export async function generateAndRunTest(url: string, name?: string): Promise<{ run_id: string; task_id: string; status: string; message: string; test_id?: string }> {
   const response = await fetch("/api/generate-and-run", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ url, name }),
   });
 
@@ -76,8 +83,22 @@ export async function generateAndRunTest(url: string, name?: string): Promise<Te
   return response.json();
 }
 
+export async function getTaskStatus(taskId: string): Promise<TaskStatus> {
+  const response = await fetch(`/api/tasks/${taskId}`, {
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  return response.json();
+}
+
 export async function listTests(): Promise<SavedTest[]> {
-  const response = await fetch("/api/tests");
+  const response = await fetch("/api/tests", {
+    credentials: "include",
+  });
 
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
@@ -87,7 +108,9 @@ export async function listTests(): Promise<SavedTest[]> {
 }
 
 export async function listRuns(): Promise<TestRun[]> {
-  const response = await fetch("/api/runs");
+  const response = await fetch("/api/runs", {
+    credentials: "include",
+  });
 
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);

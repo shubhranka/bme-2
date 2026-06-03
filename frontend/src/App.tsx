@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { runTest, generateAndRunTest, listTests, listRuns } from "./api";
+import { runTest, generateAndRunTest, getTaskStatus, listTests, listRuns } from "./api";
 import { GeneratedCode } from "./components/GeneratedCode";
 import { LoginForm } from "./components/auth/LoginForm";
 import { RegisterForm } from "./components/auth/RegisterForm";
@@ -88,15 +88,38 @@ function App() {
     setResult(null);
 
     try {
+      // Submit task
       const response = useAI
         ? await generateAndRunTest(url, testName || undefined)
         : await runTest(url);
-      setResult(response);
-      // Reload history after test run
-      loadHistory();
+
+      // Poll for task completion
+      const pollInterval = setInterval(async () => {
+        try {
+          const status = await getTaskStatus(response.task_id);
+
+          if (status.status === "completed" && status.result) {
+            clearInterval(pollInterval);
+            setResult(status.result);
+            setTestLoading(false);
+            loadHistory();
+          } else if (status.status === "failed") {
+            clearInterval(pollInterval);
+            setResult({ success: false, error: status.error || "Task failed" });
+            setTestLoading(false);
+          }
+        } catch (err) {
+          clearInterval(pollInterval);
+          setResult({ success: false, error: "Failed to check task status" });
+          setTestLoading(false);
+        }
+      }, 2000); // Poll every 2 seconds
+
+      // Store interval for cleanup
+      return () => clearInterval(pollInterval);
+
     } catch (err: any) {
-      setResult({ success: false, error: "Failed to run test" });
-    } finally {
+      setResult({ success: false, error: err.message || "Failed to queue test" });
       setTestLoading(false);
     }
   };
