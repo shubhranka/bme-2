@@ -15,35 +15,23 @@ interface GeneratedCodeProps {
 
 export function GeneratedCode({ test }: GeneratedCodeProps) {
   return (
-    <div
-      style={{
-        marginTop: "20px",
-        padding: "15px",
-        backgroundColor: "#f5f5f5",
-        borderRadius: "8px",
-        border: "1px solid #ddd",
-      }}
-    >
-      <h3>Generated Test Plan</h3>
-      <p style={{ fontStyle: "italic" }}>{test.description}</p>
+    <div className="mt-6 p-6 bg-gray-50 rounded-xl border border-gray-200">
+      <h3 className="text-lg font-semibold text-gray-900 mb-2">Generated Test Plan</h3>
+      <p className="text-gray-600 italic mb-6">{test.description}</p>
 
-      <h4>Steps:</h4>
-      <ol style={{ paddingLeft: "20px" }}>
+      <h4 className="text-md font-semibold text-gray-900 mb-4">Steps:</h4>
+      <ol className="space-y-3">
         {test.steps.map((step, index) => (
-          <li key={index} style={{ marginBottom: "8px" }}>
-            <code
-              style={{
-                backgroundColor: "#e8e8e8",
-                padding: "2px 6px",
-                borderRadius: "4px",
-                color: "#d63384",
-              }}
-            >
-              {step.action_type}
-            </code>
-            <span style={{ marginLeft: "8px" }}>
-              {step.description || `on "${step.selector}"`}
-            </span>
+          <li key={index} className="flex items-start gap-3">
+            <span className="font-bold text-gray-700">{index + 1}.</span>
+            <div className="flex-1">
+              <code className="px-2 py-1 bg-pink-100 text-pink-800 rounded text-sm font-mono">
+                {step.action_type}
+              </code>
+              <span className="ml-2 text-gray-700">
+                {step.description || `on "${step.selector}"`}
+              </span>
+            </div>
           </li>
         ))}
       </ol>

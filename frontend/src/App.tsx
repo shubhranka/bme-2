@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
 import { runTest, generateAndRunTest, listTests, listRuns } from "./api";
 import { GeneratedCode } from "./components/GeneratedCode";
+import { LoginForm } from "./components/auth/LoginForm";
+import { RegisterForm } from "./components/auth/RegisterForm";
+import { useAuth } from "./hooks/useAuth";
 
 interface TestStep {
   action_type: string;
@@ -46,18 +49,22 @@ interface TestRun {
 }
 
 function App() {
+  const { user, loading, logout, refreshAuth } = useAuth();
+  const [showLogin, setShowLogin] = useState(true);
   const [url, setUrl] = useState("");
   const [testName, setTestName] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [testLoading, setTestLoading] = useState(false);
   const [result, setResult] = useState<TestResult | null>(null);
   const [useAI, setUseAI] = useState(true);
   const [savedTests, setSavedTests] = useState<SavedTest[]>([]);
   const [recentRuns, setRecentRuns] = useState<TestRun[]>([]);
 
-  // Load test history on mount
+  // Load test history on mount or when user changes
   useEffect(() => {
-    loadHistory();
-  }, []);
+    if (user) {
+      loadHistory();
+    }
+  }, [user]);
 
   const loadHistory = async () => {
     try {
@@ -69,11 +76,15 @@ function App() {
     }
   };
 
+  const handleAuthSuccess = () => {
+    refreshAuth();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!url) return;
 
-    setLoading(true);
+    setTestLoading(true);
     setResult(null);
 
     try {
@@ -83,235 +94,245 @@ function App() {
       setResult(response);
       // Reload history after test run
       loadHistory();
-    } catch (err) {
+    } catch (err: any) {
       setResult({ success: false, error: "Failed to run test" });
     } finally {
-      setLoading(false);
+      setTestLoading(false);
     }
   };
 
-  return (
-    <div style={{ maxWidth: "1100px", margin: "0 auto", padding: "20px", fontFamily: "system-ui" }}>
-      <h1>E2E Test Engineer</h1>
-      <p>Enter a URL to run an AI-generated Playwright test.</p>
+  // Show loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-gray-600">Loading...</div>
+      </div>
+    );
+  }
 
-      <form onSubmit={handleSubmit} style={{ marginBottom: "20px" }}>
-        <div style={{ marginBottom: "15px" }}>
-          <label style={{ marginRight: "15px" }}>
-            <input
-              type="radio"
-              checked={useAI}
-              onChange={() => setUseAI(true)}
-              style={{ marginRight: "5px" }}
-            />
-            AI-Generated Test
-          </label>
-          <label>
-            <input
-              type="radio"
-              checked={!useAI}
-              onChange={() => setUseAI(false)}
-              style={{ marginRight: "5px" }}
-            />
-            Simple Test
-          </label>
-        </div>
-
-        {useAI && (
-          <input
-            type="text"
-            value={testName}
-            onChange={(e) => setTestName(e.target.value)}
-            placeholder="Test name (optional - saves to database)"
-            disabled={loading}
-            style={{
-              padding: "10px",
-              fontSize: "16px",
-              width: "60%",
-              marginRight: "10px",
-              marginBottom: "10px",
-              display: "block",
-            }}
+  // Show auth forms if not authenticated
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+        {showLogin ? (
+          <LoginForm
+            onSuccess={handleAuthSuccess}
+          />
+        ) : (
+          <RegisterForm
+            onSuccess={handleAuthSuccess}
+            onSwitchToLogin={() => setShowLogin(true)}
           />
         )}
-
-        <input
-          type="url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://example.com"
-          disabled={loading}
-          style={{
-            padding: "10px",
-            fontSize: "16px",
-            width: "60%",
-            marginRight: "10px",
-          }}
-        />
-        <button
-          type="submit"
-          disabled={loading || !url}
-          style={{
-            padding: "10px 20px",
-            fontSize: "16px",
-            cursor: loading ? "not-allowed" : "pointer",
-          }}
-        >
-          {loading ? "Running..." : useAI ? "Generate & Run" : "Run Test"}
-        </button>
-      </form>
-
-      {/* Test History */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "30px" }}>
-        {/* Saved Tests */}
-        <div>
-          <h3>Saved Tests ({savedTests.length})</h3>
-          {savedTests.length === 0 ? (
-            <p style={{ color: "#666" }}>No saved tests yet</p>
-          ) : (
-            <div style={{ backgroundColor: "#f8f8f8", padding: "15px", borderRadius: "8px" }}>
-              {savedTests.map((test) => (
-                <div
-                  key={test.id}
-                  style={{
-                    padding: "10px",
-                    borderBottom: "1px solid #ddd",
-                  }}
-                >
-                  <div style={{ fontWeight: "bold" }}>{test.name}</div>
-                  <div style={{ fontSize: "14px", color: "#666" }}>{test.target_url}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Recent Runs */}
-        <div>
-          <h3>Recent Runs ({recentRuns.length})</h3>
-          {recentRuns.length === 0 ? (
-            <p style={{ color: "#666" }}>No test runs yet</p>
-          ) : (
-            <div style={{ backgroundColor: "#f8f8f8", padding: "15px", borderRadius: "8px" }}>
-              {recentRuns.map((run) => (
-                <div
-                  key={run.id}
-                  style={{
-                    padding: "10px",
-                    borderBottom: "1px solid #ddd",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                    <span
-                      style={{
-                        padding: "2px 8px",
-                        borderRadius: "4px",
-                        fontSize: "12px",
-                        backgroundColor: run.status === "passed" ? "#d4edda" : run.status === "failed" ? "#f8d7da" : "#fff3cd",
-                        color: run.status === "passed" ? "#155724" : run.status === "failed" ? "#721c24" : "#856404",
-                      }}
-                    >
-                      {run.status}
-                    </span>
-                    <span style={{ fontWeight: "bold" }}>{run.page_title || "Unknown Page"}</span>
-                  </div>
-                  <div style={{ fontSize: "14px", color: "#666" }}>{run.page_url}</div>
-                </div>
-              ))}
-            </div>
-          )}
+        <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2">
+          <button
+            onClick={() => setShowLogin(!showLogin)}
+            className="text-sm text-gray-600 hover:text-gray-900"
+          >
+            {showLogin ? "Don't have an account? Sign up" : "Already have an account? Sign in"}
+          </button>
         </div>
       </div>
+    );
+  }
 
-      {result && (
-        <div style={{ marginTop: "20px" }}>
-          {result.success ? (
-            <>
-              <h2>Test Passed!</h2>
-              <p>
-                <strong>Title:</strong> {result.title}
-              </p>
-              <p>
-                <strong>URL:</strong> {result.url}
-              </p>
+  // Show main app if authenticated
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+          <h1 className="text-2xl font-bold text-gray-900">E2E Test Engineer</h1>
+          <div className="flex items-center gap-4">
+            <span className="text-gray-600">{user.email}</span>
+            <button
+              onClick={logout}
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-all"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
+      </header>
 
-              {result.test && <GeneratedCode test={result.test} />}
+      {/* Main Content */}
+      <main className="max-w-7xl mx-auto px-4 py-8">
+        <p className="text-gray-600 mb-8">Enter a URL to run an AI-generated Playwright test.</p>
 
-              {result.steps && result.steps.length > 0 && (
-                <div style={{ marginTop: "20px" }}>
-                  <h3>Execution Steps:</h3>
-                  <div
-                    style={{
-                      backgroundColor: "#f8f8f8",
-                      padding: "15px",
-                      borderRadius: "8px",
-                    }}
-                  >
-                    {result.steps.map((step, index) => (
-                      <div
-                        key={index}
-                        style={{
-                          marginBottom: "10px",
-                          paddingBottom: "10px",
-                          borderBottom: index < result.steps!.length - 1 ? "1px solid #ddd" : "none",
-                        }}
+        {/* Test Form */}
+        <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
+          <form onSubmit={handleSubmit}>
+            <div className="flex gap-4 mb-4">
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={useAI}
+                  onChange={() => setUseAI(true)}
+                  className="w-4 h-4 text-blue-600"
+                />
+                <span className="text-gray-700">AI-Generated Test</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={!useAI}
+                  onChange={() => setUseAI(false)}
+                  className="w-4 h-4 text-blue-600"
+                />
+                <span className="text-gray-700">Simple Test</span>
+              </label>
+            </div>
+
+            {useAI && (
+              <input
+                type="text"
+                value={testName}
+                onChange={(e) => setTestName(e.target.value)}
+                placeholder="Test name (optional - saves to database)"
+                disabled={testLoading}
+                className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-4"
+              />
+            )}
+
+            <div className="flex gap-4">
+              <input
+                type="url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://example.com"
+                disabled={testLoading}
+                className="flex-1 px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              <button
+                type="submit"
+                disabled={testLoading || !url}
+                className="px-8 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                {testLoading ? "Running..." : useAI ? "Generate & Run" : "Run Test"}
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {/* Test History */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+          {/* Saved Tests */}
+          <div className="bg-white rounded-xl shadow-sm p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Saved Tests ({savedTests.length})</h3>
+            {savedTests.length === 0 ? (
+              <p className="text-gray-500">No saved tests yet</p>
+            ) : (
+              <div className="space-y-3">
+                {savedTests.map((test) => (
+                  <div key={test.id} className="p-3 bg-gray-50 rounded-lg">
+                    <div className="font-medium text-gray-900">{test.name}</div>
+                    <div className="text-sm text-gray-600">{test.target_url}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Recent Runs */}
+          <div className="bg-white rounded-xl shadow-sm p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Recent Runs ({recentRuns.length})</h3>
+            {recentRuns.length === 0 ? (
+              <p className="text-gray-500">No test runs yet</p>
+            ) : (
+              <div className="space-y-3">
+                {recentRuns.map((run) => (
+                  <div key={run.id} className="p-3 bg-gray-50 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`px-2 py-1 text-xs font-medium rounded ${
+                          run.status === "passed"
+                            ? "bg-green-100 text-green-800"
+                            : run.status === "failed"
+                            ? "bg-red-100 text-red-800"
+                            : "bg-yellow-100 text-yellow-800"
+                        }`}
                       >
-                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                          <span style={{ fontWeight: "bold" }}>{index + 1}.</span>
-                          <code
-                            style={{
-                              backgroundColor: step.status === "failed" ? "#f8d7da" : "#d4edda",
-                              padding: "2px 8px",
-                              borderRadius: "4px",
-                              color: step.status === "failed" ? "#721c24" : "#155724",
-                            }}
-                          >
-                            {step.action}
-                          </code>
-                          <span style={{ color: "#666", fontSize: "14px" }}>{step.selector}</span>
-                          {step.error && (
-                            <span style={{ color: "red", fontSize: "14px" }}>
-                              Error: {step.error}
-                            </span>
+                        {run.status}
+                      </span>
+                      <span className="font-medium text-gray-900">{run.page_title || "Unknown Page"}</span>
+                    </div>
+                    <div className="text-sm text-gray-600">{run.page_url}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Test Result */}
+        {result && (
+          <div className="bg-white rounded-xl shadow-sm p-6">
+            {result.success ? (
+              <>
+                <h2 className="text-2xl font-bold text-gray-900 mb-4">Test Passed!</h2>
+                <div className="space-y-2 mb-6">
+                  <p className="text-gray-700"><strong>Title:</strong> {result.title}</p>
+                  <p className="text-gray-700"><strong>URL:</strong> {result.url}</p>
+                </div>
+
+                {result.test && <GeneratedCode test={result.test} />}
+
+                {result.steps && result.steps.length > 0 && (
+                  <div className="mt-6">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Execution Steps:</h3>
+                    <div className="space-y-3">
+                      {result.steps.map((step, index) => (
+                        <div
+                          key={index}
+                          className={`p-4 rounded-lg border ${
+                            step.status === "failed" ? "border-red-200 bg-red-50" : "border-green-200 bg-green-50"
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 mb-2">
+                            <span className="font-bold text-gray-700">{index + 1}.</span>
+                            <code className={`px-2 py-1 rounded text-sm font-mono ${
+                              step.status === "failed" ? "bg-red-200 text-red-800" : "bg-green-200 text-green-800"
+                            }`}>
+                              {step.action}
+                            </code>
+                            <span className="text-gray-600 text-sm">{step.selector}</span>
+                            {step.error && (
+                              <span className="text-red-600 text-sm">Error: {step.error}</span>
+                            )}
+                          </div>
+                          {step.screenshot && (
+                            <img
+                              src={step.screenshot}
+                              alt={`Step ${index + 1}`}
+                              className="max-w-xs mt-2 rounded border border-gray-300"
+                            />
                           )}
                         </div>
-                        {step.screenshot && (
-                          <img
-                            src={step.screenshot}
-                            alt={`Step ${index + 1}`}
-                            style={{
-                              maxWidth: "200px",
-                              marginTop: "10px",
-                              border: "1px solid #ddd",
-                              borderRadius: "4px",
-                            }}
-                          />
-                        )}
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {result.screenshot && (
-                <div style={{ marginTop: "20px" }}>
-                  <h3>Final Screenshot:</h3>
-                  <img
-                    src={result.screenshot}
-                    alt="Screenshot"
-                    style={{ maxWidth: "100%", border: "1px solid #ccc", borderRadius: "4px" }}
-                  />
-                </div>
-              )}
-            </>
-          ) : (
-            <div style={{ color: "red" }}>
-              <h2>Test Failed</h2>
-              <p>{result.error}</p>
-            </div>
-          )}
-        </div>
-      )}
+                {result.screenshot && (
+                  <div className="mt-6">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Final Screenshot:</h3>
+                    <img
+                      src={result.screenshot}
+                      alt="Screenshot"
+                      className="max-w-full rounded-lg border border-gray-300"
+                    />
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="text-red-600">
+                <h2 className="text-2xl font-bold mb-2">Test Failed</h2>
+                <p>{result.error}</p>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
     </div>
   );
 }

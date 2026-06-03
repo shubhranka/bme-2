@@ -10,10 +10,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .runner import run_simple_test, run_generated_test
 from .discovery import discover_page_structure
 from .llm import generate_test_from_structure
-from .db import get_db, init_db, Base
+from .db import get_db, init_db
 from .models.test import Test, TestRun, Screenshot
+from .models.user import User
+from .api import auth
+from .api.deps import get_current_user, get_optional_user
 
 app = FastAPI(title="E2E Test Engineer")
+
+# Include auth router
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 
 
 # Pydantic models for API requests/responses
@@ -43,15 +49,26 @@ class RunResponse(BaseModel):
     created_at: str
 
 
+class UserResponse(BaseModel):
+    id: str
+    email: str
+
+
 # Startup event - initialize database
 @app.on_event("startup")
 async def startup():
     await init_db()
 
 
+@app.get("/api/me", response_model=UserResponse)
+async def get_me(current_user: User = Depends(get_current_user)):
+    """Get current authenticated user."""
+    return UserResponse(id=current_user.id, email=current_user.email)
+
+
 @app.post("/api/run")
-async def run_test(request: TestRequest, db: AsyncSession = Depends(get_db)):
-    """Run a simple test against the given URL."""
+async def run_test(request: TestRequest, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Run a simple test against the given URL (requires auth)."""
     if not request.url:
         raise HTTPException(status_code=400, detail="URL is required")
 
@@ -90,8 +107,8 @@ async def run_test(request: TestRequest, db: AsyncSession = Depends(get_db)):
 
 
 @app.post("/api/generate-and-run")
-async def generate_and_run(request: TestRequest, db: AsyncSession = Depends(get_db)):
-    """Generate a test using AI and run it."""
+async def generate_and_run(request: TestRequest, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Generate a test using AI and run it (requires auth)."""
     if not request.url:
         raise HTTPException(status_code=400, detail="URL is required")
 
@@ -151,7 +168,7 @@ async def generate_and_run(request: TestRequest, db: AsyncSession = Depends(get_
         test_run.completed_at = datetime.utcnow()
         test_run.page_title = page_structure.title
         test_run.page_url = page_structure.url
-        test_run.video_path = result.get("final_screenshot")  # Store final screenshot as video_path for now
+        test_run.video_path = result.get("final_screenshot")
         await db.commit()
 
         # Add the generated test info to result
@@ -186,8 +203,9 @@ async def generate_and_run(request: TestRequest, db: AsyncSession = Depends(get_
 
 
 @app.get("/api/tests", response_model=list[TestResponse])
-async def list_tests(db: AsyncSession = Depends(get_db)):
-    """List all saved tests."""
+async def list_tests(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """List all saved tests for the current user."""
+    # For now, list all tests (we'll add user_id to Test model later)
     result = await db.execute(select(Test).order_by(Test.created_at.desc()))
     tests = result.scalars().all()
 
@@ -205,7 +223,7 @@ async def list_tests(db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/tests/{test_id}", response_model=TestResponse)
-async def get_test(test_id: str, db: AsyncSession = Depends(get_db)):
+async def get_test(test_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Get a specific test."""
     result = await db.execute(select(Test).where(Test.id == test_id))
     test = result.scalar_one_or_none()
@@ -224,7 +242,7 @@ async def get_test(test_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/runs", response_model=list[RunResponse])
-async def list_runs(db: AsyncSession = Depends(get_db)):
+async def list_runs(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """List all test runs."""
     result = await db.execute(select(TestRun).order_by(TestRun.created_at.desc()).limit(50))
     runs = result.scalars().all()
@@ -246,7 +264,7 @@ async def list_runs(db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/runs/{run_id}", response_model=RunResponse)
-async def get_run(run_id: str, db: AsyncSession = Depends(get_db)):
+async def get_run(run_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Get a specific test run."""
     result = await db.execute(select(TestRun).where(TestRun.id == run_id))
     run = result.scalar_one_or_none()
