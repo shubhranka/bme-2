@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime
+from sqlalchemy import String, Text, DateTime, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 from ..db import Base
 
@@ -42,4 +42,4 @@ class Screenshot(Base):
     image_path: Mapped[str] = mapped_column(Text)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    step_index: Mapped[int] = mapped_column(default=0)
+    step_index: Mapped[int] = mapped_column(Integer, default=0)

@@ -3,6 +3,7 @@ import redis.asyncio as redis
 from fastapi import WebSocket, WebSocketDisconnect, Depends
 from ..api.deps import get_current_user
 from ..models.user import User
+import asyncio
 
 
 class WebSocketLogManager:
@@ -57,9 +58,9 @@ manager = WebSocketLogManager()
 
 async def subscribe_to_logs(run_id: str):
     """Subscribe to Redis pub/sub for logs from a specific run."""
-    redis_client = await redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
-
+    redis_client = None
     try:
+        redis_client = await redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
         pubsub = redis_client.pubsub()
         await pubsub.subscribe(f"logs:{run_id}")
 
@@ -72,6 +73,12 @@ async def subscribe_to_logs(run_id: str):
                 except json.JSONDecodeError:
                     yield {"type": "log", "data": data}
 
+    except Exception as e:
+        print(f"Redis pub/sub error: {e}")
+        # Keep yielding keepalive messages
+        while True:
+            await asyncio.sleep(10)
+            yield {"type": "keepalive", "message": "Connection active"}
     finally:
-        await pubsub.unsubscribe(f"logs:{run_id}")
-        await redis_client.close()
+        if redis_client:
+            await redis_client.close()

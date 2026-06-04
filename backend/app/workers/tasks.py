@@ -4,14 +4,61 @@ import json
 from pathlib import Path
 from playwright.async_api import async_playwright
 import redis
+import asyncio
 
 from ..celery_app import celery_app
 from ..discovery import discover_page_structure
 from ..llm import generate_test_from_structure
 from ..schemas import GeneratedTest
+from ..db import async_session
+from ..models.test import Screenshot
 
 ARTIFACTS_DIR = Path(__file__).parent.parent.parent / "artifacts"
 ARTIFACTS_DIR.mkdir(exist_ok=True)
+
+
+async def save_screenshot_to_db(run_id: str, image_path: str, step_index: int, description: str = None):
+    """Save a screenshot record to the database."""
+    async with async_session() as db:
+        screenshot = Screenshot(
+            id=str(uuid.uuid4()),
+            run_id=run_id,
+            image_path=image_path,
+            timestamp=datetime.utcnow(),
+            description=description,
+            step_index=step_index
+        )
+        db.add(screenshot)
+        await db.commit()
+
+
+async def update_run_status(run_id: str, status: str, page_title: str = None, page_url: str = None, error_message: str = None):
+    """Update test run status in the database."""
+    from sqlalchemy import select, update
+    from ..models.test import TestRun
+
+    print(f"update_run_status called: run_id={run_id}, status={status}")
+
+    async with async_session() as db:
+        result = await db.execute(select(TestRun).where(TestRun.id == run_id))
+        test_run = result.scalar_one_or_none()
+
+        if test_run:
+            print(f"Found test_run, updating status to {status}")
+            test_run.status = status
+            if page_title:
+                test_run.page_title = page_title
+            if page_url:
+                test_run.page_url = page_url
+            if error_message:
+                test_run.error_message = error_message
+            if status in ["passed", "failed"]:
+                test_run.completed_at = datetime.utcnow()
+
+            await db.commit()
+            print(f"Database updated successfully")
+        else:
+            print(f"Test run not found: {run_id}")
 
 
 def publish_log(run_id: str, message: dict):
@@ -38,6 +85,15 @@ def run_simple_test_task(self, url: str) -> dict:
     })
 
     result = asyncio.run(_run_simple_test(url, run_id))
+
+    # Update database status
+    asyncio.run(update_run_status(
+        run_id=run_id,
+        status="passed" if result.get("success") else "failed",
+        page_title=result.get("title"),
+        page_url=result.get("url"),
+        error_message=result.get("error")
+    ))
 
     # Publish completion message
     publish_log(run_id, {
@@ -70,6 +126,15 @@ async def _run_simple_test(url: str, run_id: str) -> dict:
             await page.goto(url, wait_until="networkidle", timeout=30000)
             screenshot_path = ARTIFACTS_DIR / f"simple_{uuid.uuid4()}.png"
             await page.screenshot(path=str(screenshot_path))
+            image_url = f"/artifacts/{screenshot_path.name}"
+
+            # Save screenshot to database
+            await save_screenshot_to_db(
+                run_id=run_id,
+                image_path=image_url,
+                step_index=0,
+                description="Initial page load"
+            )
 
             title = await page.title()
             url_final = page.url
@@ -83,7 +148,7 @@ async def _run_simple_test(url: str, run_id: str) -> dict:
                 "success": True,
                 "title": title,
                 "url": url_final,
-                "screenshot": f"/artifacts/{screenshot_path.name}",
+                "screenshot": image_url,
             }
         except Exception as e:
             publish_log(run_id, {
@@ -115,6 +180,15 @@ def generate_and_run_task(self, url: str, name: str | None = None) -> dict:
     })
 
     result = asyncio.run(_generate_and_run(url, name, run_id))
+
+    # Update database status
+    asyncio.run(update_run_status(
+        run_id=run_id,
+        status="passed" if result.get("success") else "failed",
+        page_title=result.get("title"),
+        page_url=result.get("url"),
+        error_message=result.get("error")
+    ))
 
     publish_log(run_id, {
         "type": "complete",
@@ -241,7 +315,25 @@ async def _run_generated_test(url: str, test: GeneratedTest, run_dir: Path, run_
                     # Take screenshot after each step
                     screenshot_path = run_dir / f"step_{i+1}.png"
                     await page.screenshot(path=str(screenshot_path))
-                    step_result["screenshot"] = f"/artifacts/{run_dir.name}/step_{i+1}.png"
+                    image_url = f"/artifacts/{run_dir.name}/step_{i+1}.png"
+                    step_result["screenshot"] = image_url
+
+                    # Save to database
+                    await save_screenshot_to_db(
+                        run_id=run_id,
+                        image_path=image_url,
+                        step_index=i,
+                        description=f"Step {i+1}: {step.action_type}"
+                    )
+
+                    # Publish screenshot event for real-time updates
+                    publish_log(run_id, {
+                        "type": "screenshot",
+                        "step_number": i + 1,
+                        "image_path": image_url,
+                        "description": f"Step {i+1}: {step.action_type}",
+                        "step_index": i
+                    })
 
                     publish_log(run_id, {
                         "type": "step_complete",
@@ -255,7 +347,16 @@ async def _run_generated_test(url: str, test: GeneratedTest, run_dir: Path, run_
                     step_result["error"] = str(e)
                     screenshot_path = run_dir / f"step_{i+1}_error.png"
                     await page.screenshot(path=str(screenshot_path))
-                    step_result["screenshot"] = f"/artifacts/{run_dir.name}/step_{i+1}_error.png"
+                    image_url = f"/artifacts/{run_dir.name}/step_{i+1}_error.png"
+                    step_result["screenshot"] = image_url
+
+                    # Save error screenshot to database
+                    await save_screenshot_to_db(
+                        run_id=run_id,
+                        image_path=image_url,
+                        step_index=i,
+                        description=f"Step {i+1} error: {str(e)}"
+                    )
 
                     publish_log(run_id, {
                         "type": "step_complete",
@@ -271,6 +372,15 @@ async def _run_generated_test(url: str, test: GeneratedTest, run_dir: Path, run_
             # Final screenshot
             final_screenshot = run_dir / "final.png"
             await page.screenshot(path=str(final_screenshot))
+            final_image_url = f"/artifacts/{run_dir.name}/final.png"
+
+            # Save final screenshot to database
+            await save_screenshot_to_db(
+                run_id=run_id,
+                image_path=final_image_url,
+                step_index=len(test.steps),
+                description="Final state"
+            )
 
             publish_log(run_id, {
                 "type": "info",
@@ -280,7 +390,7 @@ async def _run_generated_test(url: str, test: GeneratedTest, run_dir: Path, run_
             return {
                 "success": True,
                 "steps": steps_results,
-                "final_screenshot": f"/artifacts/{run_dir.name}/final.png",
+                "final_screenshot": final_image_url,
             }
 
         except Exception as e:

@@ -4,6 +4,8 @@ import { GeneratedCode } from "./components/GeneratedCode";
 import { LoginForm } from "./components/auth/LoginForm";
 import { RegisterForm } from "./components/auth/RegisterForm";
 import { useAuth } from "./hooks/useAuth";
+import { ExecutionScreen } from "./components/execution/ExecutionScreen";
+import { CodeEditor } from "./components/editor/CodeEditor";
 
 interface TestStep {
   action_type: string;
@@ -59,6 +61,14 @@ function App() {
   const [savedTests, setSavedTests] = useState<SavedTest[]>([]);
   const [recentRuns, setRecentRuns] = useState<TestRun[]>([]);
 
+  // Execution screen state
+  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
+  const [showExecutionScreen, setShowExecutionScreen] = useState(false);
+
+  // Code editing state
+  const [editingCode, setEditingCode] = useState(false);
+  const [editedCode, setEditedCode] = useState<string>("");
+
   // Load test history on mount or when user changes
   useEffect(() => {
     if (user) {
@@ -92,6 +102,10 @@ function App() {
       const response = useAI
         ? await generateAndRunTest(url, testName || undefined)
         : await runTest(url);
+
+      // Set run_id for WebSocket connection and show execution screen
+      setCurrentRunId(response.run_id);
+      setShowExecutionScreen(true);
 
       // Poll for task completion
       const pollInterval = setInterval(async () => {
@@ -235,6 +249,28 @@ function App() {
               </button>
             </div>
           </form>
+
+          {/* Execution Screen - Live logs and screenshot timeline */}
+          {showExecutionScreen && currentRunId && (
+            <div className="mt-6 pt-6 border-t border-gray-200">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Live Execution</h3>
+                <button
+                  onClick={() => setShowExecutionScreen(false)}
+                  className="text-sm text-gray-600 hover:text-gray-900"
+                >
+                  Close
+                </button>
+              </div>
+              <ExecutionScreen
+                runId={currentRunId}
+                onComplete={() => {
+                  // Refresh results when execution completes
+                  loadHistory();
+                }}
+              />
+            </div>
+          )}
         </div>
 
         {/* Test History */}
@@ -292,11 +328,75 @@ function App() {
           <div className="bg-white rounded-xl shadow-sm p-6">
             {result.success ? (
               <>
-                <h2 className="text-2xl font-bold text-gray-900 mb-4">Test Passed!</h2>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-2xl font-bold text-gray-900">Test Passed!</h2>
+                  {result.test && (
+                    <button
+                      onClick={() => {
+                        setEditingCode(!editingCode);
+                        if (!editingCode) {
+                          // Generate Python code from test steps
+                          const pythonCode = `import asyncio
+from playwright.async_api import async_playwright
+
+async def run_test():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
+        page = await context.new_page()
+
+        await page.goto("${url}")
+${result.test?.steps.map((step, i) => `        # Step ${i + 1}: ${step.description || step.action_type}
+        await page.${step.action_type}("${step.selector}")`).join('\n')}
+
+        await browser.close()
+
+if __name__ == "__main__":
+    asyncio.run(run_test())`;
+                          setEditedCode(pythonCode);
+                        }
+                      }}
+                      className="px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-all"
+                    >
+                      {editingCode ? "Hide Editor" : "Edit & Re-run"}
+                    </button>
+                  )}
+                </div>
+
                 <div className="space-y-2 mb-6">
                   <p className="text-gray-700"><strong>Title:</strong> {result.title}</p>
                   <p className="text-gray-700"><strong>URL:</strong> {result.url}</p>
                 </div>
+
+                {/* Code Editor for editing and re-running */}
+                {editingCode && result.test && (
+                  <div className="mb-6">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-lg font-semibold text-gray-900">Edit Test Code</h3>
+                      <button
+                        onClick={async () => {
+                          // Re-run with edited code
+                          setTestLoading(true);
+                          setResult(null);
+                          setShowExecutionScreen(true);
+                          try {
+                            // For now, just re-run the original test
+                            // TODO: Implement API endpoint for running custom code
+                            const response = await generateAndRunTest(url, testName || undefined);
+                            setCurrentRunId(response.run_id);
+                          } catch (err: any) {
+                            setResult({ success: false, error: err.message || "Failed to re-run test" });
+                            setTestLoading(false);
+                          }
+                        }}
+                        className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-all"
+                      >
+                        Re-run Test
+                      </button>
+                    </div>
+                    <CodeEditor code={editedCode} language="python" height="300px" />
+                  </div>
+                )}
 
                 {result.test && <GeneratedCode test={result.test} />}
 
@@ -311,7 +411,7 @@ function App() {
                             step.status === "failed" ? "border-red-200 bg-red-50" : "border-green-200 bg-green-50"
                           }`}
                         >
-                          <div className="flex items-center gap-3 mb-2">
+                          <div className="flex items-center gap-3">
                             <span className="font-bold text-gray-700">{index + 1}.</span>
                             <code className={`px-2 py-1 rounded text-sm font-mono ${
                               step.status === "failed" ? "bg-red-200 text-red-800" : "bg-green-200 text-green-800"
@@ -323,27 +423,10 @@ function App() {
                               <span className="text-red-600 text-sm">Error: {step.error}</span>
                             )}
                           </div>
-                          {step.screenshot && (
-                            <img
-                              src={step.screenshot}
-                              alt={`Step ${index + 1}`}
-                              className="max-w-xs mt-2 rounded border border-gray-300"
-                            />
-                          )}
                         </div>
                       ))}
                     </div>
-                  </div>
-                )}
-
-                {result.screenshot && (
-                  <div className="mt-6">
-                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Final Screenshot:</h3>
-                    <img
-                      src={result.screenshot}
-                      alt="Screenshot"
-                      className="max-w-full rounded-lg border border-gray-300"
-                    />
+                    <p className="text-sm text-gray-500 mt-2">* Screenshots are shown in the timeline above</p>
                   </div>
                 )}
               </>

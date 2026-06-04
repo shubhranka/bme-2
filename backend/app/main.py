@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_db, init_db
-from .models.test import Test, TestRun
+from .models.test import Test, TestRun, Screenshot
 from .models.user import User
 from .api import auth
 from .api.deps import get_current_user
@@ -258,22 +258,56 @@ async def get_run(run_id: str, current_user: User = Depends(get_current_user), d
     )
 
 
+@app.get("/api/runs/{run_id}/screenshots")
+async def get_run_screenshots(run_id: str, db: AsyncSession = Depends(get_db)):
+    """Get all screenshots for a test run."""
+    print(f"Fetching screenshots for run_id: {run_id}")
+
+    result = await db.execute(
+        select(Screenshot)
+        .where(Screenshot.run_id == run_id)
+        .order_by(Screenshot.timestamp)
+    )
+    screenshots = result.scalars().all()
+
+    print(f"Found {len(screenshots)} screenshots")
+
+    return [
+        {
+            "id": s.id,
+            "image_path": s.image_path,
+            "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+            "description": s.description,
+            "step_index": s.step_index
+        }
+        for s in screenshots
+    ]
+
+
 @app.websocket("/api/ws/logs/{run_id}")
 async def websocket_logs(websocket: WebSocket, run_id: str):
     """WebSocket endpoint for streaming test execution logs."""
+    print(f"WebSocket function called for run_id: {run_id}")
     connection_id = str(uuid.uuid4())
 
     try:
-        await manager.connect(websocket, run_id, connection_id)
+        await websocket.accept()
+        print(f"WebSocket accepted for run_id: {run_id}")
 
-        # Stream logs from Redis pub/sub
+        # Keep connection alive and listen for Redis messages
         async for log_entry in subscribe_to_logs(run_id):
-            await manager.broadcast_to_run(run_id, log_entry)
+            try:
+                await websocket.send_json(log_entry)
+            except Exception as e:
+                print(f"Error sending message: {e}")
+                break
 
     except WebSocketDisconnect:
-        manager.disconnect(run_id, connection_id)
+        print(f"WebSocket disconnected for run_id: {run_id}")
     except Exception as e:
-        # Send error message if connection fails
+        print(f"WebSocket error for run_id: {run_id}: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         try:
             await websocket.send_json({
                 "type": "error",
@@ -281,7 +315,6 @@ async def websocket_logs(websocket: WebSocket, run_id: str):
             })
         except:
             pass
-        manager.disconnect(run_id, connection_id)
 
 
 @app.get("/artifacts/{file_name}")
