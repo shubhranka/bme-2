@@ -1,3 +1,4 @@
+import asyncio
 from openai import OpenAI
 from .schemas import GeneratedTest, TestAction
 from .discovery import PageStructure
@@ -8,6 +9,44 @@ client = OpenAI(
     api_key=settings.LLM_API_KEY,
     base_url=settings.LLM_BASE_URL
 ) if settings.LLM_API_KEY else None
+
+
+async def generate_with_llm(prompt: str, response_format: str = "text") -> str:
+    """Generate a response using the LLM with a custom prompt.
+
+    Args:
+        prompt: The prompt to send to the LLM
+        response_format: "text" or "json" - specifies the expected response format
+
+    Returns:
+        The LLM response as a string
+    """
+    if not client:
+        raise ValueError("LLM client not configured. Please set LLM_API_KEY and LLM_BASE_URL.")
+
+    try:
+        # Run the OpenAI call in a thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.chat.completions.create(
+                model=settings.LLM_MODEL,
+                messages=[
+                    {"role": "system", "content": "You are a helpful AI assistant that responds with valid JSON when requested."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"} if response_format == "json" else None,
+                max_tokens=2048,
+                temperature=0.7,
+            )
+        )
+
+        content = response.choices[0].message.content or ""
+        return content
+
+    except Exception as e:
+        print(f"LLM call failed: {e}")
+        raise
 
 
 def generate_test_from_structure(page: PageStructure) -> GeneratedTest:

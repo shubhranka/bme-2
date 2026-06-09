@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
-import { runTest, generateAndRunTest, getTaskStatus, listTests, listRuns } from "./api";
+import { runTest, generateAndRunTest, getTaskStatus, listTests, listRuns, startExploration, stopExploration } from "./api";
 import { GeneratedCode } from "./components/GeneratedCode";
 import { LoginForm } from "./components/auth/LoginForm";
 import { RegisterForm } from "./components/auth/RegisterForm";
 import { useAuth } from "./hooks/useAuth";
 import { ExecutionScreen } from "./components/execution/ExecutionScreen";
 import { CodeEditor } from "./components/editor/CodeEditor";
+import { ExplorationProgress } from "./components/agentic/ExplorationProgress";
 
 interface TestStep {
   action_type: string;
@@ -60,6 +61,11 @@ function App() {
   const [useAI, setUseAI] = useState(true);
   const [savedTests, setSavedTests] = useState<SavedTest[]>([]);
   const [recentRuns, setRecentRuns] = useState<TestRun[]>([]);
+
+  // Exploration state
+  const [explorationUrl, setExplorationUrl] = useState("");
+  const [explorationLoading, setExplorationLoading] = useState(false);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 
   // Execution screen state
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
@@ -266,6 +272,75 @@ function App() {
                 runId={currentRunId}
                 onComplete={() => {
                   // Refresh results when execution completes
+                  loadHistory();
+                }}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Agentic Exploration */}
+        <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
+          <h2 className="text-xl font-bold text-gray-900 mb-4">Autonomous Exploration</h2>
+          <p className="text-gray-600 mb-4">
+            Let AI explore your entire application, discover pages, and generate comprehensive test coverage automatically.
+          </p>
+
+          <form onSubmit={async (e) => {
+            e.preventDefault();
+            if (!explorationUrl) return;
+
+            setExplorationLoading(true);
+            try {
+              const response = await startExploration({
+                url: explorationUrl,
+                max_iterations: 50,
+                coverage_threshold: 0.80
+              });
+              setCurrentSessionId(response.session_id);
+              setExplorationLoading(false);
+            } catch (err: any) {
+              console.error("Failed to start exploration:", err);
+              setExplorationLoading(false);
+            }
+          }}>
+            <div className="flex gap-4">
+              <input
+                type="url"
+                value={explorationUrl}
+                onChange={(e) => setExplorationUrl(e.target.value)}
+                placeholder="https://example.com"
+                disabled={explorationLoading}
+                className="flex-1 px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              />
+              <button
+                type="submit"
+                disabled={explorationLoading || !explorationUrl}
+                className="px-8 py-3 bg-purple-600 text-white font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                {explorationLoading ? "Starting..." : "Start Exploration"}
+              </button>
+            </div>
+          </form>
+
+          {/* Exploration Progress */}
+          {currentSessionId && (
+            <div className="mt-6 pt-6 border-t border-gray-200">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Exploration Progress</h3>
+                <button
+                  onClick={async () => {
+                    await stopExploration(currentSessionId);
+                    setCurrentSessionId(null);
+                  }}
+                  className="text-sm text-red-600 hover:text-red-900"
+                >
+                  Stop
+                </button>
+              </div>
+              <ExplorationProgress
+                sessionId={currentSessionId}
+                onComplete={() => {
                   loadHistory();
                 }}
               />

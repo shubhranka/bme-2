@@ -8,18 +8,21 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_db, init_db
-from .models.test import Test, TestRun, Screenshot
+from .models.test import Test, TestRun, Screenshot, ExplorationSession
 from .models.user import User
 from .api import auth
 from .api.deps import get_current_user
 from .workers.tasks import run_simple_test_task, generate_and_run_task
 from .celery_app import celery_app
 from .api.websocket import manager, subscribe_to_logs
+from .api import exploration, export
 
 app = FastAPI(title="E2E Test Engineer")
 
-# Include auth router
+# Include routers
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(exploration.router, prefix="/api/exploration", tags=["exploration"])
+app.include_router(export.router, prefix="/api/export", tags=["export"])
 
 
 # Pydantic models for API requests/responses

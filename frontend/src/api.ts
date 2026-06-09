@@ -118,3 +118,86 @@ export async function listRuns(): Promise<TestRun[]> {
 
   return response.json();
 }
+
+// Exploration session types
+interface ExplorationSession {
+  id: string;
+  start_url: string;
+  status: string;
+  max_iterations: number;
+  coverage_threshold: number;
+  current_iteration: number;
+  coverage_percentage: number;
+  created_at: string;
+  completed_at: string | null;
+}
+
+interface CoverageMetrics {
+  page_coverage: number;
+  element_coverage: number;
+  total_pages: number;
+  tested_pages: number;
+  total_elements: number;
+  tested_elements: number;
+  overall_coverage: number;
+}
+
+interface ExplorationRequest {
+  url: string;
+  max_iterations?: number;
+  coverage_threshold?: number;
+  follow_links?: boolean;
+  max_pages?: number;
+}
+
+export async function startExploration(request: ExplorationRequest): Promise<{ session_id: string; task_id: string; status: string; message: string }> {
+  const response = await fetch("/api/exploration/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+export async function getExplorationSession(sessionId: string): Promise<ExplorationSession & { coverage: CoverageMetrics }> {
+  const response = await fetch(`/api/exploration/${sessionId}`, {
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+export async function stopExploration(sessionId: string): Promise<{ message: string }> {
+  const response = await fetch(`/api/exploration/${sessionId}/stop`, {
+    method: "POST",
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+export async function listExplorationSessions(): Promise<ExplorationSession[]> {
+  const response = await fetch("/api/exploration/sessions", {
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  return response.json();
+}
